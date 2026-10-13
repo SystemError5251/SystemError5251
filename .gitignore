@@ -1,0 +1,15 @@
+# Godot
+game/.godot/
+game/*.translation
+*.import.tmp
+
+# Builds & Signierung
+build/
+*.apk
+*.aab
+*.idsig
+*.keystore
+*.jks
+
+# Python
+__pycache__/

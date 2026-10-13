@@ -1,0 +1,89 @@
+name: Android-Build
+
+# Tests + Debug-APK bei jedem Push/PR, signiertes Release-APK bei Versions-Tags (v*).
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  GODOT_VERSION: "4.7.2"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Godot aus dem Cache
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}-android
+
+      - name: Godot und Android-Export-Vorlagen laden
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        run: |
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          tpl="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          mkdir -p ~/godot "$tpl"
+          curl -fsSL -o /tmp/godot.zip "$base/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+          curl -fsSL -o /tmp/templates.tpz "$base/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          curl -fsSL -o /tmp/SHA512-SUMS.txt "$base/SHA512-SUMS.txt"
+          (cd /tmp && grep -E " (Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip|Godot_v${GODOT_VERSION}-stable_export_templates.tpz)$" SHA512-SUMS.txt | sha512sum -c -)
+          unzip -q /tmp/godot.zip -d ~/godot
+          unzip -q -j /tmp/templates.tpz 'templates/android_debug.apk' 'templates/android_release.apk' 'templates/version.txt' -d "$tpl"
+          rm /tmp/godot.zip /tmp/templates.tpz
+
+      - name: Godot-Pfad setzen
+        run: echo "GODOT_BIN=$HOME/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64" >> "$GITHUB_ENV"
+
+      - name: Assets importieren
+        run: $GODOT_BIN --headless --path game --import || true
+
+      - name: Tests
+        run: $GODOT_BIN --headless --path game res://tests/test_runner.tscn
+
+      - name: Debug-APK bauen
+        run: tools/build_apk.sh debug
+
+      - name: Debug-APK hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: glitch-brawl-debug-apk
+          path: build/glitch-brawl-*-debug.apk
+
+      - name: Release-APK bauen (nur bei Tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          GODOT_ANDROID_KEYSTORE_RELEASE_USER: ${{ secrets.ANDROID_KEYSTORE_ALIAS }}
+          GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::error::Secret ANDROID_KEYSTORE_BASE64 fehlt – Release-APK kann nicht signiert werden."
+            exit 1
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > build/release.keystore
+          export GODOT_ANDROID_KEYSTORE_RELEASE_PATH="$PWD/build/release.keystore"
+          tools/build_apk.sh release
+          rm -f build/release.keystore
+
+      - name: GitHub-Release erstellen
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/glitch-brawl-*-release.apk
+          generate_release_notes: true
