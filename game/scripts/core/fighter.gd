@@ -25,6 +25,10 @@ var is_local := false
 var is_dummy := false
 var controller: Object = null
 var spawn_index := 0
+## LAN: Peer-ID des steuernden Spielers (0 = Bot)
+var peer_id := 0
+## LAN-Client: vom Host gemeldet, dass dieser Gegner gerade versteckt ist
+var net_hidden := false
 
 var hp := 0.0
 var max_hp := 0.0
@@ -35,6 +39,9 @@ var attack_cd := 0.0
 var special_cd := 0.0
 var ult := 0.0
 var combo := 0
+var _combo_left := 0
+var _combo_t := 0.0
+var _combo_dir := Vector2.RIGHT
 var facing := Vector2.RIGHT
 var velocity := Vector2.ZERO
 var last_hurt_t := 99.0
@@ -121,6 +128,13 @@ func damage_mult() -> float:
 	return 1.25 if overflow_t > 0.0 else 1.0
 
 
+## Faktor für erlittenen Schaden (z. B. Panzerung während OVERCLOCKs Dash).
+func damage_taken_mult() -> float:
+	if dash_t > 0.0 and dash_damage > 0.0:
+		return float(def["special"].get("armor", 1.0))
+	return 1.0
+
+
 func reload_time() -> float:
 	return float(def["attack"]["reload"]) / attack_speed_mult()
 
@@ -142,6 +156,9 @@ func ult_ready() -> bool:
 func hidden_from(viewer_team: int) -> bool:
 	if viewer_team == team or not alive:
 		return false
+	# Im LAN entscheidet der Host, was ein Client sehen darf.
+	if match_ref.net and match_ref.net.is_client:
+		return net_hidden
 	if not in_noise():
 		return false
 	if marked_t > 0.0 or last_attack_t < 1.0 or last_hurt_t < 0.6:
@@ -189,6 +206,7 @@ func tick(delta: float, inp: InputFrame) -> void:
 		if t:
 			facing = (t.position - position).normalized()
 
+	_tick_combo(delta)
 	if inp.attack:
 		try_attack(inp.attack_aim)
 	if inp.special:
@@ -263,11 +281,32 @@ func try_attack(aim: Vector2) -> bool:
 	return true
 
 
+## Ein Angriff ist eine Kombo aus mehreren schnellen Schlägen (Konzept: 3 × 420).
+## Der erste Schlag kommt sofort, die weiteren folgen im Abstand von `hit_interval`.
 func _attack_melee(dir: Vector2, atk: Dictionary) -> void:
+	_combo_dir = dir
+	_combo_left = int(atk.get("hits", 1)) - 1
+	_combo_t = float(atk.get("hit_interval", 0.1))
+	combo = 0
+	_melee_hit(dir, atk, _combo_left == 0)
+
+
+func _tick_combo(delta: float) -> void:
+	if _combo_left <= 0:
+		return
+	_combo_t -= delta
+	if _combo_t > 0.0:
+		return
+	var atk: Dictionary = def["attack"]
+	_combo_left -= 1
+	_combo_t = float(atk.get("hit_interval", 0.1)) / attack_speed_mult()
+	_melee_hit(_combo_dir, atk, _combo_left == 0)
+
+
+func _melee_hit(dir: Vector2, atk: Dictionary, knock: bool) -> void:
 	var reach := float(atk["range"]) * TILE
 	var half_arc := deg_to_rad(float(atk["arc"])) * 0.5
-	combo = (combo + 1) % 3
-	var knock := combo == 0
+	combo += 1
 	for e in match_ref.enemies_of(self):
 		var to := e.position - position
 		var dist := to.length()
@@ -437,6 +476,7 @@ func take_hit_feedback() -> void:
 
 func die() -> void:
 	alive = false
+	_combo_left = 0
 	death_fx = 0.0
 	dash_t = 0.0
 	knock_t = 0.0
@@ -471,6 +511,8 @@ func respawn() -> void:
 
 func _process(delta: float) -> void:
 	_anim_t += delta
+	if not alive and match_ref.net and match_ref.net.is_client:
+		death_fx = minf(1.0, death_fx + delta * 2.5)
 	flash = maxf(0.0, flash - delta * 6.0)
 	var target_alpha := 1.0
 	var viewer := match_ref.view_team()

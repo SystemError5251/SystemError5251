@@ -44,14 +44,14 @@ func _ready() -> void:
 	var b3 := UiKit.button("TRAINING")
 	b3.pressed.connect(func() -> void: Game.goto_select("training"))
 	box.add_child(b3)
-	var b4 := UiKit.button("LAN-SPIEL (bald)")
-	b4.disabled = true
+	var b4 := UiKit.button("LAN-SPIEL")
+	b4.pressed.connect(func() -> void: Game.goto_lan())
 	box.add_child(b4)
 	var b5 := UiKit.button("EINSTELLUNGEN")
 	b5.pressed.connect(func() -> void: Game.goto_settings())
 	box.add_child(b5)
 
-	var ver := UiKit.label("v%s · Prototyp (Phase 0/1) · Bots statt Online-Gegner" % Game.VERSION, 8,
+	var ver := UiKit.label("v%s · Prototyp · LAN-Mehrspieler im WLAN" % Game.VERSION, 8,
 		Color(UiKit.MUTED, 0.8))
 	ver.position = Vector2(8, 344)
 	add_child(ver)

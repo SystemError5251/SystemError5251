@@ -1,5 +1,7 @@
 # Fortschrittsbericht 1: Spielbarer Prototyp
 
+> **Neuer Stand:** [Fortschrittsbericht 2 – LAN-Mehrspieler (v0.2.0)](FORTSCHRITT-2.md). Die Vorschläge 2–4 aus diesem Bericht sind dort umgesetzt.
+
 > **Stand:** 13.10.2026 · **Version:** 0.1.0 · **Engine:** Godot 4.7.2 · **Konzept:** [KONZEPT.md](KONZEPT.md)
 
 ## Kurzfassung

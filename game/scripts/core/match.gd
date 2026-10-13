@@ -33,6 +33,8 @@ var pickup_layer: Node2D
 var camera: Camera2D
 var hud: Hud
 var touch: TouchControls
+## Netzwerk-Teil im LAN-Spiel (sonst null)
+var net: MatchNet = null
 
 var fighters: Array[Fighter] = []
 var projectiles: Array[Projectile] = []
@@ -56,11 +58,30 @@ var _end_t := 0.0
 var _rng := RandomNumberGenerator.new()
 
 
+func _enter_tree() -> void:
+	# Im Match wird die volle Bildschirmbreite genutzt. Das sichtbare Spielfeld bleibt
+	# trotzdem für alle gleich groß (640 × 360); die Ränder deckt das HUD ab.
+	get_tree().root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_EXPAND
+
+
+func _exit_tree() -> void:
+	get_tree().root.content_scale_aspect = Window.CONTENT_SCALE_ASPECT_KEEP
+	if Net.match_ref == self:
+		Net.match_ref = null
+
+
 func _ready() -> void:
 	if config.is_empty():
 		config = Game.pending.duplicate()
 	mode = String(config.get("mode", "team_crash"))
-	rules = MODES[mode]
+	rules = (MODES[mode] as Dictionary).duplicate()
+	# Optionale Überschreibungen (Tests, kurze LAN-Testspiele)
+	for key in ["time", "target"]:
+		if config.has(key):
+			rules[key] = config[key]
+	if bool(config.get("net", false)):
+		net = MatchNet.new(self, String(config.get("net_role", "host")))
+		Net.match_ref = self
 	_rng.seed = int(config.get("seed", Time.get_ticks_usec()))
 	time_left = float(rules["time"])
 
@@ -77,6 +98,9 @@ func _ready() -> void:
 	add_child(world)
 	arena.setup(String(rules["map"]), world)
 	arena.block_destroyed.connect(_on_block_destroyed)
+	arena.temp_wall_added.connect(func(c: Vector2i, dur: float) -> void:
+		if net:
+			net.reliable(["twall", c.x, c.y, dur]))
 	fx = FxLayer.new()
 	fx.name = "Fx"
 	fx.z_index = 50
@@ -102,6 +126,8 @@ func _ready() -> void:
 		camera.make_current()
 		camera.reset_smoothing()
 		finished.connect(Game.on_match_finished)
+		if net and net.is_host:
+			finished.connect(func(r: Dictionary) -> void: Net.send_end(r))
 		hud = Hud.new()
 		hud.match_ref = self
 		add_child(hud)
@@ -111,7 +137,41 @@ func _ready() -> void:
 		hud.banner("3", Color.WHITE, 0.8)
 
 
+## LAN-Spiel: Die Aufstellung kommt vom Host (gleiche Reihenfolge auf allen Geräten).
+func _spawn_from_roster(roster: Array) -> void:
+	var my_peer := int(config.get("my_peer", 1))
+	var level := int(config.get("bot_level", 1))
+	var autopilot := bool(config.get("autopilot", false))
+	for entry in roster:
+		var r: Dictionary = entry
+		var f := _add_fighter(String(r["char"]), int(r["team"]), String(r["name"]), int(r["slot"]))
+		f.peer_id = int(r["peer"])
+		if f.peer_id == my_peer and f.peer_id != 0:
+			f.is_local = true
+			local = f
+		if net.is_host:
+			if f.peer_id == 0:
+				f.controller = BotController.new(self, level)
+			elif f.is_local:
+				f.controller = _local_controller(autopilot, level)
+			else:
+				var c := NetController.new(f.peer_id)
+				f.controller = c
+				net.register_controller(f.peer_id, c)
+		elif f.is_local:
+			f.controller = _local_controller(autopilot, level)
+
+
+func _local_controller(autopilot: bool, level: int) -> Object:
+	if autopilot:
+		return BotController.new(self, level)
+	return PlayerController.new()
+
+
 func _spawn_fighters() -> void:
+	if config.has("roster"):
+		_spawn_from_roster(config["roster"])
+		return
 	var player_char := String(config.get("char", "overclock"))
 	var autopilot := bool(config.get("autopilot", false))
 	var level := int(config.get("bot_level", 1))
@@ -202,6 +262,9 @@ func _physics_process(delta: float) -> void:
 
 
 func step(delta: float) -> void:
+	if net and net.is_client:
+		net.client_step(delta)
+		return
 	elapsed += delta
 	if ended:
 		_end_t += delta
@@ -210,6 +273,8 @@ func step(delta: float) -> void:
 			result = {}
 			finished.emit(r)
 		_tick_visual_only(delta)
+		if net:
+			net.after_host_step()
 		return
 	if frozen:
 		_tick_countdown(delta)
@@ -234,6 +299,8 @@ func step(delta: float) -> void:
 	if not frozen and round_pause <= 0.0:
 		_tick_rules(delta)
 	_tick_camera(delta)
+	if net:
+		net.after_host_step()
 
 
 func _tick_visual_only(delta: float) -> void:
@@ -246,12 +313,11 @@ func _tick_countdown(delta: float) -> void:
 	var before := ceili(countdown)
 	countdown -= delta
 	var now := ceili(countdown)
-	if hud and now != before and now > 0:
-		hud.banner(str(now), Color.WHITE, 0.8)
+	if now != before and now > 0:
+		_banner(str(now), Color.WHITE, 0.8)
 	if countdown <= 0.0:
 		frozen = false
-		if hud:
-			hud.banner("LOS!", Color("ffe14d"), 0.9)
+		_banner("LOS!", Color("ffe14d"), 0.9)
 
 
 func _tick_projectiles(delta: float) -> void:
@@ -313,13 +379,13 @@ func _apply_pickup(f: Fighter, pk: Pickup) -> void:
 	match pk.kind:
 		Pickup.Kind.BACKUP:
 			f.hp = minf(f.max_hp, f.hp + 1500.0)
-			overlay.popup(f.position, "+1500", Color("2fbf6a"))
+			overlay.popup(f, "+1500", Color("2fbf6a"))
 		Pickup.Kind.CACHE:
 			f.cache_t = 6.0
-			overlay.popup(f.position, "TEMPO!", Color("27e1ff"))
+			overlay.popup(f, "TEMPO!", Color("27e1ff"))
 		Pickup.Kind.OVERFLOW:
 			f.overflow_t = 8.0
-			overlay.popup(f.position, "SCHADEN!", Color("ff4d4d"))
+			overlay.popup(f, "SCHADEN!", Color("ff4d4d"))
 	fx.ring(pk.pos, Pickup.COLORS[pk.kind], 26.0)
 
 
@@ -356,9 +422,9 @@ func _finish_round(winner: int) -> void:
 		_end_match(0 if round_wins[0] > round_wins[1] else 1)
 		return
 	round_pause = 2.0
-	if hud:
-		var txt := "RUNDE FÜR BLAU" if winner == 0 else ("RUNDE FÜR ORANGE" if winner == 1 else "UNENTSCHIEDEN")
-		hud.banner(txt, Fighter.TEAM_COLORS[winner] if winner >= 0 else Color.WHITE, 1.6)
+	show_round_banner(winner)
+	if net:
+		net.reliable(["round", winner])
 
 
 func _start_next_round() -> void:
@@ -369,8 +435,7 @@ func _start_next_round() -> void:
 		f.respawn()
 		f.invuln_t = 0.0
 		f.ult = minf(f.ult, 0.5)
-	if hud:
-		hud.banner("RUNDE %d" % round_no, Color("ffe14d"), 1.0)
+	_banner("RUNDE %d" % round_no, Color("ffe14d"), 1.0)
 
 
 func _end_match(winner: int) -> void:
@@ -380,17 +445,46 @@ func _end_match(winner: int) -> void:
 	frozen = true
 	var stats: Array = []
 	for f in fighters:
-		stats.append({"name": f.display_name, "char": f.char_id, "team": f.team, "local": f.is_local,
-			"kos": f.kos, "deaths": f.deaths, "damage": roundi(f.damage_dealt)})
-	result = {"mode": mode, "title": rules["title"], "winner": winner, "local_team": 0,
-		"score": score.duplicate(), "rounds": round_wins.duplicate(), "duration": elapsed, "stats": stats}
+		stats.append({"id": f.id, "name": f.display_name, "char": f.char_id, "team": f.team, "local": f.is_local,
+			"human": f.peer_id != 0, "kos": f.kos, "deaths": f.deaths, "damage": roundi(f.damage_dealt)})
+	result = {"mode": mode, "title": rules["title"], "winner": winner, "local_team": view_team(),
+		"net": net != null, "score": score.duplicate(), "rounds": round_wins.duplicate(), "duration": elapsed,
+		"stats": stats}
+	show_end_banner(winner)
+	if net:
+		net.reliable(["end", winner])
+
+
+## Banner anzeigen und im LAN-Spiel an alle Clients weitergeben.
+func _banner(text: String, col: Color, dur: float) -> void:
 	if hud:
-		if winner == 0:
-			hud.banner("SIEG!", Color("3cff8a"), 2.2)
-		elif winner == 1:
-			hud.banner("NIEDERLAGE", Color("ff3df2"), 2.2)
-		else:
-			hud.banner("UNENTSCHIEDEN", Color.WHITE, 2.2)
+		hud.banner(text, col, dur)
+	if net:
+		net.reliable(["banner", text, col.to_rgba32(), dur])
+
+
+## Rundenbanner aus Sicht des eigenen Teams.
+func show_round_banner(winner: int) -> void:
+	if not hud:
+		return
+	if winner < 0:
+		hud.banner("UNENTSCHIEDEN", Color.WHITE, 1.6)
+	elif winner == view_team():
+		hud.banner("RUNDE GEWONNEN", Fighter.TEAM_COLORS[0], 1.6)
+	else:
+		hud.banner("RUNDE VERLOREN", Fighter.TEAM_COLORS[1], 1.6)
+
+
+## Endbanner aus Sicht des eigenen Teams.
+func show_end_banner(winner: int) -> void:
+	if not hud:
+		return
+	if winner < 0:
+		hud.banner("UNENTSCHIEDEN", Color.WHITE, 2.2)
+	elif winner == view_team():
+		hud.banner("SIEG!", Color("3cff8a"), 2.2)
+	else:
+		hud.banner("NIEDERLAGE", Color("ff3df2"), 2.2)
 
 
 ## Beendet das Match vorzeitig (Pause-Menü „Aufgeben“).
@@ -407,23 +501,22 @@ func deal_damage(src: Fighter, target: Fighter, amount: float, dir: Vector2, blo
 	if ended or round_pause > 0.0 or not target.alive or target.team == src.team:
 		return 0.0
 	if target.invuln_t > 0.0:
-		overlay.popup(target.position, "IMMUN", Color(0.8, 0.8, 1.0))
+		overlay.popup(target, "IMMUN", Color(0.8, 0.8, 1.0))
 		return 0.0
 	if blockable and target.shield_t > 0.0 and dir != Vector2.ZERO:
 		var half := deg_to_rad(float(target.def["special"].get("arc", 140.0))) * 0.5
 		if absf(target.shield_dir().angle_to(-dir)) <= half:
-			overlay.popup(target.position, "BLOCK", Color("27e1ff"))
+			overlay.popup(target, "BLOCK", Color("27e1ff"))
 			fx.sparks(target.position + target.shield_dir() * 18.0 + Vector2(0, -12), Color("27e1ff"), 4)
 			return 0.0
-	var dmg := amount * src.damage_mult()
+	var dmg := amount * src.damage_mult() * target.damage_taken_mult()
 	target.hp -= dmg
 	target.last_hurt_t = 0.0
 	target.last_attacker = src
 	target.take_hit_feedback()
 	src.damage_dealt += dmg
 	src.ult = minf(1.0, src.ult + dmg / float(src.def["ult"]["charge"]))
-	var col := Color("ffe14d") if src.is_local else (Color("ff5a5a") if target.is_local else Color(1, 1, 1, 0.9))
-	overlay.damage_number(target, dmg, col)
+	overlay.damage_number(target, dmg, src)
 	if target.is_local:
 		Game.vibrate(25)
 		add_shake(2.0)
@@ -443,6 +536,8 @@ func _on_ko(victim: Fighter, killer: Fighter) -> void:
 		Game.vibrate(90)
 	if hud:
 		hud.killfeed(killer, victim)
+	if net:
+		net.reliable(["kill", killer.id, victim.id])
 	var respawn := float(rules["respawn"])
 	match mode:
 		"team_crash":
@@ -457,6 +552,8 @@ func _on_ko(victim: Fighter, killer: Fighter) -> void:
 
 func hit_block(c: Vector2i, amount: float) -> void:
 	arena.damage_block(c, amount)
+	if net:
+		net.reliable(["block", c.x, c.y, amount])
 
 
 func _on_block_destroyed(c: Vector2i) -> void:
@@ -523,6 +620,15 @@ func view_team() -> int:
 	return local.team if local else 0
 
 
+## Farbe einer Schadenszahl aus Sicht des Betrachters.
+func damage_color(src: Fighter, target: Fighter) -> Color:
+	if src.is_local:
+		return Color("ffe14d")
+	if target.is_local:
+		return Color("ff5a5a")
+	return Color(1, 1, 1, 0.9)
+
+
 ## Das eigene Team wird immer blau dargestellt.
 func display_team(team: int) -> int:
 	return team if view_team() == 0 else 1 - team
@@ -542,6 +648,8 @@ func _tick_camera(delta: float) -> void:
 		return
 	if local:
 		camera.position = local.position + Vector2(0, -10)
+	elif not fighters.is_empty():
+		camera.position = fighters[0].position + Vector2(0, -10)   # Zuschauer
 	shake = maxf(0.0, shake - delta * 20.0)
 	camera.offset = Vector2(randf_range(-shake, shake), randf_range(-shake, shake)).round()
 
@@ -559,5 +667,5 @@ func _draw_pickups() -> void:
 
 
 func _notification(what: int) -> void:
-	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and hud and not ended:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and hud and not ended and net == null:
 		hud.set_paused(true)

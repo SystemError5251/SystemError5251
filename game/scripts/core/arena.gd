@@ -4,6 +4,7 @@ extends Node2D
 ## Rauschen-Felder und Wegfindung für Bots.
 
 signal block_destroyed(cell: Vector2i)
+signal temp_wall_added(cell: Vector2i, duration: float)
 
 const TILE := 32
 const BLOCK_HP := 2400.0
@@ -221,6 +222,7 @@ func add_temp_wall(c: Vector2i, duration: float) -> bool:
 	var spr := _make_sprite(c, _temp_tex, 1, 0)
 	spr.modulate = Color(1, 1, 1, 0)
 	spr.create_tween().tween_property(spr, "modulate:a", 1.0, 0.15)
+	temp_wall_added.emit(c, duration)
 	return true
 
 

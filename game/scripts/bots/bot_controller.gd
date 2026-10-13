@@ -113,6 +113,11 @@ func _think(f: Fighter) -> void:
 		return
 
 	var dir := to / maxf(dist, 0.001)
+	# Aktiver Frontschild des Gegners: nicht frontal anlaufen, sondern seitlich umgehen
+	if t.shield_t > 0.0 and t.shield_dir().dot(-dir) > 0.3:
+		var flank := dir.orthogonal() * _strafe
+		_move = (flank * 1.0 + dir * 0.35).normalized()
+		return
 	var radial := 0.0
 	if dist > pref + 16.0:
 		radial = 1.0
@@ -198,8 +203,10 @@ func _combat(f: Fighter, inp: InputFrame) -> void:
 				if f.last_hurt_t < 0.4 and dist < 8.0 * TILE:
 					inp.special = true
 
-	# Basisangriff
+	# Basisangriff (nicht in einen aktiven Frontschild hinein)
 	if _react_t > 0.0 or not los or f.ammo < 1.0:
+		return
+	if t.shield_t > 0.0 and absf(t.shield_dir().angle_to(-to.normalized())) <= deg_to_rad(70.0):
 		return
 	if dist <= f.attack_range_px() + Fighter.HIT_RADIUS * 0.5:
 		# Bei voller Munition sofort, sonst mit kleiner Pause (spart Munition für Folgeschüsse)

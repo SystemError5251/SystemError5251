@@ -10,6 +10,8 @@ const MOVE_RADIUS := 30.0
 const DEADZONE := 9.0
 const MOUSE_INDEX := 100
 
+## Positionen beziehen sich auf ein 640×360-Layout; rechte Elemente werden am rechten,
+## linke am linken Bildschirmrand verankert (siehe stick_center()).
 const STICKS := {
 	"attack": {"center": Vector2(566, 290), "radius": 36.0, "grab": 50.0, "label": ""},
 	"special": {"center": Vector2(484, 318), "radius": 22.0, "grab": 30.0, "label": "SPEZ"},
@@ -24,6 +26,17 @@ var _sticks := {}       # Name -> {touch, cur, max}
 var _queued: Array = [] # [Name, Aim]
 var _touchscreen := false
 var _time := 0.0
+var _margins := Vector4.ZERO
+
+
+## Mittelpunkt eines Sticks für die aktuelle Bildschirmgröße (Breitbild, Notch).
+func stick_center(k: String) -> Vector2:
+	var base: Vector2 = STICKS[k]["center"]
+	return base + Vector2(size.x - 640.0 - _margins.z, size.y - 360.0 - _margins.w)
+
+
+func move_hint_center() -> Vector2:
+	return Vector2(92.0 + _margins.x, size.y - 76.0 - _margins.w)
 
 
 func _ready() -> void:
@@ -61,7 +74,7 @@ func _input(event: InputEvent) -> void:
 func _down(index: int, pos: Vector2) -> void:
 	for k in STICKS:
 		var s: Dictionary = _sticks[k]
-		var center: Vector2 = STICKS[k]["center"]
+		var center := stick_center(k)
 		if s["touch"] == -1 and pos.distance_to(center) <= float(STICKS[k]["grab"]):
 			s["touch"] = index
 			s["cur"] = pos
@@ -84,7 +97,7 @@ func _drag(index: int, pos: Vector2) -> void:
 		var s: Dictionary = _sticks[k]
 		if s["touch"] == index:
 			s["cur"] = pos
-			var center: Vector2 = STICKS[k]["center"]
+			var center := stick_center(k)
 			s["max"] = maxf(float(s["max"]), pos.distance_to(center))
 
 
@@ -97,7 +110,7 @@ func _up(index: int, pos: Vector2) -> void:
 		if s["touch"] != index:
 			continue
 		s["touch"] = -1
-		var center: Vector2 = STICKS[k]["center"]
+		var center := stick_center(k)
 		var off := pos - center
 		if float(s["max"]) < DEADZONE:
 			_queued.append([k, Vector2.ZERO])       # Antippen → Auto-Aim
@@ -140,7 +153,7 @@ func aim_preview() -> Dictionary:
 		var s: Dictionary = _sticks[k]
 		if s["touch"] == -1 or float(s["max"]) < DEADZONE:
 			continue
-		var center: Vector2 = STICKS[k]["center"]
+		var center := stick_center(k)
 		var off: Vector2 = Vector2(s["cur"]) - center
 		var dir := off.normalized() if off.length() > 0.5 else Vector2.RIGHT
 		return {"kind": k, "dir": dir, "cancel": off.length() < DEADZONE}
@@ -149,6 +162,7 @@ func aim_preview() -> Dictionary:
 
 func _process(delta: float) -> void:
 	_time += delta
+	_margins = Game.safe_margins(size)
 	queue_redraw()
 
 
@@ -161,12 +175,12 @@ func _draw() -> void:
 		draw_arc(_move_origin, MOVE_RADIUS + 6.0, 0.0, TAU, 32, Color(1, 1, 1, 0.3), 1.5)
 		draw_circle(_move_origin + move_vector() * MOVE_RADIUS, 13.0, Color(1, 1, 1, 0.45))
 	else:
-		var hint := Vector2(92, 284)
+		var hint := move_hint_center()
 		draw_arc(hint, MOVE_RADIUS + 6.0, 0.0, TAU, 32, Color(1, 1, 1, 0.12), 1.5)
 		draw_circle(hint, 11.0, Color(1, 1, 1, 0.1))
 	for k in STICKS:
 		var cfg: Dictionary = STICKS[k]
-		var center: Vector2 = cfg["center"]
+		var center := stick_center(k)
 		var r := float(cfg["radius"])
 		var s: Dictionary = _sticks[k]
 		var active: bool = s["touch"] != -1

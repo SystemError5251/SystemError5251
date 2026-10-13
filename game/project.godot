@@ -6,7 +6,7 @@ config_version=5
 
 config/name="GLITCH BRAWL"
 config/description="2D-Multiplayer-Arena-Brawler"
-config/version="0.1.0"
+config/version="0.2.0"
 run/main_scene="res://scenes/main_menu.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.png"
@@ -16,6 +16,7 @@ boot_splash/show_image=false
 [autoload]
 
 Game="*res://scripts/autoload/game.gd"
+Net="*res://scripts/net/net.gd"
 
 [display]
 

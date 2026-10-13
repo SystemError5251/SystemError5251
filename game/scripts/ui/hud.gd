@@ -50,20 +50,28 @@ func _build_pause_menu() -> void:
 	var resume := UiKit.button("WEITER", Vector2(200, 28), true)
 	resume.pressed.connect(func() -> void: set_paused(false))
 	box.add_child(resume)
-	var quit := UiKit.button("AUFGEBEN")
-	quit.pressed.connect(func() -> void:
-		set_paused(false)
-		match_ref.surrender())
-	box.add_child(quit)
-	var menu := UiKit.button("HAUPTMENÜ")
-	menu.pressed.connect(func() -> void: Game.goto_menu())
-	box.add_child(menu)
+	if match_ref.net:
+		var leave := UiKit.button("MATCH VERLASSEN")
+		leave.pressed.connect(func() -> void:
+			Net.leave()
+			Game.goto_menu())
+		box.add_child(leave)
+	else:
+		var quit := UiKit.button("AUFGEBEN")
+		quit.pressed.connect(func() -> void:
+			set_paused(false)
+			match_ref.surrender())
+		box.add_child(quit)
+		var menu := UiKit.button("HAUPTMENÜ")
+		menu.pressed.connect(func() -> void: Game.goto_menu())
+		box.add_child(menu)
 
 
 func set_paused(p: bool) -> void:
 	if match_ref.ended:
 		p = false
-	match_ref.paused = p
+	# Im LAN-Spiel läuft das Match für die anderen weiter; nur das Menü wird angezeigt.
+	match_ref.paused = p and match_ref.net == null
 	_pause_panel.visible = p
 	touch.visible = not p
 
@@ -81,6 +89,8 @@ func killfeed(killer: Fighter, victim: Fighter) -> void:
 
 func _process(delta: float) -> void:
 	_time += delta
+	var margins := Game.safe_margins(_info.size)
+	_pause_btn.position = Vector2(_info.size.x - 32.0 - margins.z, 6.0 + margins.y)
 	for e in _feed:
 		e["t"] = float(e["t"]) + delta
 	_feed = _feed.filter(func(e: Dictionary) -> bool: return float(e["t"]) < 5.0)
@@ -91,34 +101,67 @@ func _process(delta: float) -> void:
 	_info.queue_redraw()
 
 
+## Sichtbares Spielfeld: immer 640 × 360, mittig. Alles außerhalb deckt das HUD ab,
+## damit Breitbild-Handys keinen Sichtvorteil haben.
+func world_rect() -> Rect2:
+	var view := _info.size
+	return Rect2(((view - Vector2(640, 360)) * 0.5).floor(), Vector2(640, 360))
+
+
+func _draw_side_bars(wr: Rect2) -> void:
+	var view := _info.size
+	var bars: Array[Rect2] = []
+	if wr.position.x > 0.0:
+		bars.append(Rect2(0, 0, wr.position.x, view.y))
+		bars.append(Rect2(wr.end.x, 0, view.x - wr.end.x, view.y))
+	if wr.position.y > 0.0:
+		bars.append(Rect2(wr.position.x, 0, wr.size.x, wr.position.y))
+		bars.append(Rect2(wr.position.x, wr.end.y, wr.size.x, view.y - wr.end.y))
+	for r in bars:
+		_info.draw_rect(r, UiKit.BG)
+		# dezentes Raster wie im Menü
+		var x := r.position.x - fmod(r.position.x, 16.0)
+		while x < r.end.x:
+			_info.draw_line(Vector2(x, r.position.y), Vector2(x, r.end.y), Color(0.15, 0.2, 0.35, 0.25), 1.0)
+			x += 16.0
+	if wr.position.x > 0.0:
+		_info.draw_line(Vector2(wr.position.x, 0), Vector2(wr.position.x, view.y), Color(UiKit.CYAN, 0.35), 1.0)
+		_info.draw_line(Vector2(wr.end.x, 0), Vector2(wr.end.x, view.y), Color(UiKit.CYAN, 0.35), 1.0)
+
+
 func _draw_info() -> void:
 	var font := Game.font
 	var m := match_ref
-	var cx := 320.0
+	var wr := world_rect()
+	_draw_side_bars(wr)
+	var cx := wr.get_center().x
+	var top := wr.position.y
+	# Das eigene Team ist immer blau und steht links.
+	var own := m.view_team()
 	match m.mode:
 		"team_crash":
-			_score_box(Rect2(cx - 92, 6, 56, 22), str(m.score[0]), UiKit.BLUE)
-			_score_box(Rect2(cx + 36, 6, 56, 22), str(m.score[1]), UiKit.ORANGE)
-			_text_c(Vector2(cx, 22), UiKit.format_time(m.time_left), 16,
+			_score_box(Rect2(cx - 92, top + 6, 56, 22), str(m.score[own]), UiKit.BLUE)
+			_score_box(Rect2(cx + 36, top + 6, 56, 22), str(m.score[1 - own]), UiKit.ORANGE)
+			_text_c(Vector2(cx, top + 22), UiKit.format_time(m.time_left), 16,
 				UiKit.MAGENTA if m.time_left < 30.0 and int(_time * 4) % 2 == 0 else UiKit.TEXT)
-			_text_c(Vector2(cx, 38), "ZIEL: %d KOs" % int(m.rules["target"]), 8, UiKit.MUTED)
+			_text_c(Vector2(cx, top + 38), "ZIEL: %d KOs" % int(m.rules["target"]), 8, UiKit.MUTED)
 		"duel":
-			_text_c(Vector2(cx, 16), "RUNDE %d" % m.round_no, 8, UiKit.MUTED)
-			_text_c(Vector2(cx, 32), UiKit.format_time(m.time_left), 16, UiKit.TEXT)
+			_text_c(Vector2(cx, top + 16), "RUNDE %d" % m.round_no, 8, UiKit.MUTED)
+			_text_c(Vector2(cx, top + 32), UiKit.format_time(m.time_left), 16, UiKit.TEXT)
 			for i in 2:
-				_dot(Vector2(cx - 50 - i * 12, 20), m.round_wins[0] > i, UiKit.BLUE)
-				_dot(Vector2(cx + 50 + i * 12, 20), m.round_wins[1] > i, UiKit.ORANGE)
+				_dot(Vector2(cx - 50 - i * 12, top + 20), m.round_wins[own] > i, UiKit.BLUE)
+				_dot(Vector2(cx + 50 + i * 12, top + 20), m.round_wins[1 - own] > i, UiKit.ORANGE)
 		"training":
-			_text_c(Vector2(cx, 18), "TRAINING", 16, UiKit.YELLOW)
+			_text_c(Vector2(cx, top + 18), "TRAINING", 16, UiKit.YELLOW)
 			var dmg := roundi(m.local.damage_dealt) if m.local else 0
-			_text_c(Vector2(cx, 32), "Schaden gesamt: %d" % dmg, 8, UiKit.TEXT)
+			_text_c(Vector2(cx, top + 32), "Schaden gesamt: %d" % dmg, 8, UiKit.TEXT)
 	# Kill-Feed
-	var y := 38.0
+	var y := top + 38.0
 	for e in _feed:
 		var a := clampf(5.0 - float(e["t"]), 0.0, 1.0)
 		var kc: Color = Fighter.TEAM_COLORS[int(e["kt"])]
 		var vc: Color = Fighter.TEAM_COLORS[int(e["vt"])]
-		var right := 630.0
+		var right := wr.end.x - 10.0
 		var vw := font.get_string_size(String(e["v"]), HORIZONTAL_ALIGNMENT_LEFT, -1, 8).x
 		var kw := font.get_string_size(String(e["k"]) + " → ", HORIZONTAL_ALIGNMENT_LEFT, -1, 8).x
 		_info.draw_rect(Rect2(right - vw - kw - 6, y - 8, vw + kw + 8, 11), Color(0, 0, 0, 0.45 * a))
@@ -133,12 +176,12 @@ func _draw_info() -> void:
 		var dur := float(_banner["dur"])
 		var a2 := clampf(minf(t * 8.0, (dur - t) * 4.0), 0.0, 1.0)
 		var size := 32 if String(_banner["text"]).length() < 12 else 24
-		UiKit.draw_glitch_text(_info, font, Vector2(cx, 150), String(_banner["text"]), size, _banner["col"], a2)
+		UiKit.draw_glitch_text(_info, font, Vector2(cx, top + 150), String(_banner["text"]), size, _banner["col"], a2)
 	# Tod: Respawn-Hinweis
 	if m.local and not m.local.alive and m.local.respawn_t > 0.0 and not m.ended:
-		_text_c(Vector2(cx, 200), "Neustart in %.1f s" % m.local.respawn_t, 16, UiKit.TEXT)
+		_text_c(Vector2(cx, top + 200), "Neustart in %.1f s" % m.local.respawn_t, 16, UiKit.TEXT)
 	if Game.settings.get("show_fps", false):
-		_info.draw_string(font, Vector2(6, 12), "%d FPS" % Engine.get_frames_per_second(), HORIZONTAL_ALIGNMENT_LEFT,
+		_info.draw_string(font, Vector2(wr.position.x + 6, top + 12), "%d FPS" % Engine.get_frames_per_second(), HORIZONTAL_ALIGNMENT_LEFT,
 			-1, 8, UiKit.MUTED)
 
 

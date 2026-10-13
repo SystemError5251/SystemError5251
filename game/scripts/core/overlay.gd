@@ -15,7 +15,10 @@ func _ready() -> void:
 
 
 ## Schadenszahlen desselben Ziels werden kurz zusammengefasst, damit nichts überlappt.
-func damage_number(target: Fighter, amount: float, col: Color) -> void:
+func damage_number(target: Fighter, amount: float, src: Fighter) -> void:
+	if match_ref.net:
+		match_ref.net.fx(["d", target.id, amount, src.id])
+	var col := match_ref.damage_color(src, target)
 	for n in _numbers:
 		if n.get("target") == target and float(n["t"]) < 0.35 and n["col"] == col:
 			n["amount"] = float(n["amount"]) + amount
@@ -27,8 +30,17 @@ func damage_number(target: Fighter, amount: float, col: Color) -> void:
 		"text": str(roundi(amount)), "col": col, "t": 0.0})
 
 
-func popup(p: Vector2, text: String, col: Color) -> void:
-	_numbers.append({"p": p + Vector2(0, -44), "text": text, "col": col, "t": 0.0})
+## Kurzer Hinweis über einem Kämpfer („BLOCK“, „+1500“ …). Mehrere Hinweise
+## für denselben Kämpfer werden übereinander gestapelt statt sich zu überdecken.
+func popup(target: Fighter, text: String, col: Color) -> void:
+	if match_ref.net:
+		match_ref.net.fx(["p", target.id, text, col.to_rgba32()])
+	var stacked := 0
+	for n in _numbers:
+		if n.get("popup_of") == target and float(n["t"]) < 0.6:
+			stacked += 1
+	_numbers.append({"popup_of": target, "p": target.position + Vector2(0, -54 - stacked * 9), "text": text,
+		"col": col, "t": 0.0, "center": true})
 
 
 func _process(delta: float) -> void:
@@ -53,7 +65,17 @@ func _draw() -> void:
 		return
 	_draw_aim_preview()
 	var viewer := match_ref.view_team()
-	for f in match_ref.fighters:
+	# Der eigene Kämpfer zuerst, dann nach Entfernung: nahe Namen haben Vorrang,
+	# Namen, die einen bereits gezeichneten überdecken würden, entfallen.
+	var order: Array[Fighter] = match_ref.fighters.duplicate()
+	var me := match_ref.local
+	if me:
+		order.sort_custom(func(x: Fighter, y: Fighter) -> bool:
+			if x == me or y == me:
+				return x == me
+			return x.position.distance_squared_to(me.position) < y.position.distance_squared_to(me.position))
+	var taken: Array[Rect2] = []
+	for f in order:
 		if not f.alive or f.alpha < 0.05:
 			continue
 		if f.hidden_from(viewer):
@@ -61,9 +83,18 @@ func _draw() -> void:
 		var a := f.alpha
 		var top := f.position + Vector2(0, -34)
 		var col: Color = Fighter.TEAM_COLORS[match_ref.display_team(f.team)]
-		# Name
+		# Name (nur wenn Platz ist)
 		var label := "DU" if f.is_local else f.display_name
-		_text(top + Vector2(0, -9), label, Color(1, 0.88, 0.3, a) if f.is_local else Color(0.85, 0.88, 1.0, 0.85 * a))
+		var lw := _font.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, 8).x
+		var lrect := Rect2(top.x - lw * 0.5 - 1, top.y - 17, lw + 2, 10)
+		var free := true
+		for t in taken:
+			if t.intersects(lrect):
+				free = false
+				break
+		if free:
+			taken.append(lrect)
+			_text(top + Vector2(0, -9), label, Color(1, 0.88, 0.3, a) if f.is_local else Color(0.85, 0.88, 1.0, 0.85 * a))
 		# Lebensbalken
 		var w := 28.0
 		var r := Rect2(top.x - w * 0.5, top.y, w, 4)
@@ -93,7 +124,7 @@ func _draw() -> void:
 	for n in _numbers:
 		var k := 1.0 - float(n["t"]) / 0.9
 		var col2: Color = n["col"]
-		_text(n["p"], String(n["text"]), Color(col2, minf(1.0, k * 2.0)), 8, false)
+		_text(n["p"], String(n["text"]), Color(col2, minf(1.0, k * 2.0)), 8, bool(n.get("center", false)))
 
 
 func _draw_aim_preview() -> void:

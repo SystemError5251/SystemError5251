@@ -56,6 +56,9 @@ jobs:
       - name: Tests
         run: $GODOT_BIN --headless --path game res://tests/test_runner.tscn
 
+      - name: LAN-Test (Host + Client, 100 ms Ping, 5 % Paketverlust)
+        run: tools/net_test.sh 20 50,5
+
       - name: Debug-APK bauen
         run: tools/build_apk.sh debug
 

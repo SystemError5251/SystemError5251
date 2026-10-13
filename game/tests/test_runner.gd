@@ -20,6 +20,10 @@ func _ready() -> void:
 	_test_full_match("team_crash", "ping", 12)
 	_test_full_match("duel", "firewall", 13)
 	_test_training()
+	_test_overclock_combo()
+	_test_net_sync()
+	_test_net_controller()
+	_test_net_replication()
 	print("Tests: %d Prüfungen, %d Fehler" % [_checks, _fails])
 	get_tree().quit(1 if _fails > 0 else 0)
 
@@ -209,3 +213,140 @@ func _test_training() -> void:
 	check(m.local.damage_dealt > 0.0, "Autopilot trifft Dummys im Training")
 	check(not m.ended, "Training endet nicht von selbst")
 	m.queue_free()
+
+
+func _test_overclock_combo() -> void:
+	var m := _make_match("duel", "overclock", 31, {"enemies": ["ping"]})
+	_skip_countdown(m)
+	var me := m.local
+	var foe := m.fighters[1]
+	foe.controller = null
+	me.position = m.arena.cell_center(Vector2i(4, 4))
+	foe.position = m.arena.cell_center(Vector2i(5, 4))
+	var hp0 := foe.hp
+	check(me.try_attack(Vector2.RIGHT), "OVERCLOCK greift an")
+	for i in 30:
+		me.tick(DT, InputFrame.new())
+	check(is_equal_approx(hp0 - foe.hp, 3 * 420.0), "Faustkombo trifft 3× (Schaden %f)" % (hp0 - foe.hp))
+	check(foe.knock_t > 0.0 or foe.position.x > m.arena.cell_center(Vector2i(5, 4)).x + 4.0,
+		"Dritter Schlag stößt zurück")
+	m.queue_free()
+
+
+# ---------------------------------------------------------------------------
+# Netzwerk
+# ---------------------------------------------------------------------------
+
+func _test_net_sync() -> void:
+	var inp := InputFrame.new()
+	inp.move = Vector2(0.6, -0.8)
+	inp.attack = true
+	inp.attack_aim = Vector2(1, 0)
+	inp.ult = true
+	var packed := NetSync.pack_input(42, inp)
+	var back := NetSync.unpack_input(packed)
+	check(NetSync.input_seq(packed) == 42, "Eingabe: Sequenznummer")
+	check(back.move.is_equal_approx(inp.move) and back.attack and back.ult and not back.special,
+		"Eingabe übersteht Kodierung")
+
+	var a := _make_match("duel", "firewall", 41, {"enemies": ["ping"]})
+	var b := _make_match("duel", "firewall", 41, {"enemies": ["ping"]})
+	var src := a.fighters[0]
+	src.hp = 1234.0
+	src.shield_t = 1.5
+	src.ult = 0.75
+	src.kos = 3
+	src.facing = Vector2.UP
+	var buf := PackedFloat32Array()
+	NetSync.write_fighter(src, buf, false)
+	check(buf.size() == NetSync.STATE_LEN, "Zustandslänge stimmt (%d)" % buf.size())
+	var dst := b.fighters[0]
+	var pos := NetSync.read_fighter(dst, buf, 0)
+	check(pos.is_equal_approx(src.position), "Position übertragen")
+	check(is_equal_approx(dst.hp, 1234.0) and is_equal_approx(dst.ult, 0.75) and dst.kos == 3
+		and is_equal_approx(dst.shield_t, 1.5), "Zustand übertragen")
+	# Versteckte Gegner: Position wird nicht verraten
+	var hidden := PackedFloat32Array()
+	NetSync.write_fighter(src, hidden, true)
+	var hp := NetSync.read_fighter(dst, hidden, 0)
+	check(dst.net_hidden and hp.x == NetSync.HIDDEN_POS, "Versteckter Gegner ohne Position")
+	a.queue_free()
+	b.queue_free()
+
+
+func _test_net_controller() -> void:
+	var c := NetController.new(2)
+	var f1 := InputFrame.new()
+	f1.move = Vector2.RIGHT
+	f1.attack = true
+	f1.attack_aim = Vector2.UP
+	var f2 := InputFrame.new()
+	f2.move = Vector2.LEFT
+	# Pakete enthalten die letzten Eingaben mehrfach – nichts darf doppelt zählen
+	c.receive([NetSync.pack_input(1, f1)])
+	c.receive([NetSync.pack_input(1, f1), NetSync.pack_input(2, f2)])
+	c.receive([NetSync.pack_input(1, f1)])
+	check(c.last_seq == 2, "Höchste Sequenz wird bestätigt")
+	var out := c.get_input(null, DT)
+	check(out.move == Vector2.LEFT, "Neueste Bewegung gilt")
+	check(out.attack and out.attack_aim == Vector2.UP, "Angriff geht nicht verloren")
+	check(not c.get_input(null, DT).attack, "Angriff wird nur einmal ausgeführt")
+
+
+## Host und Client im selben Prozess, direkt verbunden: Der Client muss den Zustand
+## des Hosts nachbilden, die eigene Figur vorhersagen und Ereignisse empfangen.
+func _test_net_replication() -> void:
+	var roster := [
+		{"peer": 1, "name": "HOST", "char": "overclock", "team": 0, "slot": 0},
+		{"peer": 0, "name": "BOT1", "char": "firewall", "team": 0, "slot": 1},
+		{"peer": 0, "name": "BOT2", "char": "ping", "team": 0, "slot": 2},
+		{"peer": 2, "name": "CLIENT", "char": "ping", "team": 1, "slot": 0},
+		{"peer": 0, "name": "BOT3", "char": "overclock", "team": 1, "slot": 1},
+		{"peer": 0, "name": "BOT4", "char": "firewall", "team": 1, "slot": 2},
+	]
+	var base := {"net": true, "roster": roster, "time": 25.0, "seed": 77}
+	var host := _make_match("team_crash", "overclock", 77, base.merged({"net_role": "host", "my_peer": 1}))
+	var client := _make_match("team_crash", "ping", 77, base.merged({"net_role": "client", "my_peer": 2}))
+	host.net.send_snapshot_fn = func(peer: int, snap: Array) -> void:
+		if peer == 2:
+			client.net.apply_snapshot(snap)
+	host.net.send_events_fn = func(evs: Array) -> void: client.net.apply_events(evs)
+	client.net.send_input_fn = func(frames: Array) -> void: host.net.receive_input(2, frames)
+	check(client.local != null and client.local.team == 1, "Client steuert Team Orange")
+	check(host.fighters[3].controller is NetController, "Host steuert Client-Figur über Netzwerk-Eingaben")
+	var kills := 0
+	for i in 60 * 14:
+		host.step(DT)
+		client.step(DT)
+	var same_hp := true
+	var same_alive := true
+	for i in host.fighters.size():
+		var hf := host.fighters[i]
+		var cf := client.fighters[i]
+		if absf(hf.hp - cf.hp) > 0.5:
+			same_hp = false
+		if hf.alive != cf.alive:
+			same_alive = false
+		kills += hf.kos
+	check(same_hp, "Lebenspunkte auf Client = Host")
+	check(same_alive, "Lebend/KO auf Client = Host")
+	check(client.score == host.score, "Punktestand synchron (%s / %s)" % [client.score, host.score])
+	check(kills > 0, "Im Netzwerk-Match fallen KOs (%d)" % kills)
+	var hl := host.fighters[3]
+	var cl := client.local
+	if hl.alive and cl.alive:
+		check(hl.position.distance_to(cl.position) < 16.0,
+			"Vorhersage nah an Host-Position (%.1f px)" % hl.position.distance_to(cl.position))
+	# Interpolierte Gegner liegen nahe an ihrer Host-Position (≈ 100 ms Verzögerung)
+	var far := 0
+	for i in host.fighters.size():
+		var hf2 := host.fighters[i]
+		var cf2 := client.fighters[i]
+		if i != 3 and hf2.alive and not cf2.net_hidden and hf2.position.distance_to(cf2.position) > 64.0:
+			far += 1
+	check(far == 0, "Interpolierte Figuren folgen dem Host (%d zu weit weg)" % far)
+	# Verbindungsabbruch: Bot übernimmt
+	host.net.peer_left(2)
+	check(host.fighters[3].controller is BotController, "Bot übernimmt nach Verbindungsabbruch")
+	host.queue_free()
+	client.queue_free()

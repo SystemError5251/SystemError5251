@@ -10,13 +10,14 @@ Patch, Bluescreen und Overclock kämpfen um die letzten freien Ressourcen.
 
 ![Team-Crash](docs/fortschritt/03-zielvorschau.png)
 
-## Status: spielbarer Prototyp (v0.1.0)
+## Status: spielbarer Prototyp mit LAN-Mehrspieler (v0.2.0)
 
-- 3 Charaktere, Team-Crash 3v3, Duell 1v1 und Training gegen Bots
-- Touch-Steuerung mit Auto-Aim, Android-APK (arm64, Android 7+)
-- Mehrspieler (LAN/online) ist der nächste Schritt
+- 3 Charaktere, Team-Crash 3v3, Duell 1v1 und Training; freie Plätze füllen Bots
+- **LAN-Mehrspieler:** Ein Handy eröffnet das Spiel, die anderen finden es im WLAN oder treten per IP bei
+- Touch-Steuerung mit Auto-Aim, Breitbild-Unterstützung, Android-APK (arm64, Android 7+)
 
-Details mit Bildern und Verbesserungsvorschlägen: **[docs/FORTSCHRITT.md](docs/FORTSCHRITT.md)**
+Fortschrittsberichte mit Bildern: **[Bericht 2 – LAN-Mehrspieler](docs/FORTSCHRITT-2.md)** ·
+[Bericht 1 – Prototyp](docs/FORTSCHRITT.md)
 Vollständiges Spielkonzept: **[docs/KONZEPT.md](docs/KONZEPT.md)**
 
 ## Projektstruktur
@@ -25,6 +26,7 @@ Vollständiges Spielkonzept: **[docs/KONZEPT.md](docs/KONZEPT.md)**
 game/                  Godot-4.7-Projekt
   scripts/core/        Simulation: Arena, Kämpfer, Match-Regeln, Effekte
   scripts/bots/        Bot-KI und Spieler-Eingabe
+  scripts/net/         LAN: Verbindung, Lobby, Spielsuche, Snapshots, Vorhersage
   scripts/ui/          Menüs, HUD, Touch-Steuerung
   scripts/data/        Charakter- und Arena-Daten
   tests/               Headless-Tests und Balancing-Simulation
@@ -33,6 +35,7 @@ tools/
   gen_assets.py        Erzeugt alle Grafiken per Code
   build_apk.sh         Baut das signierte APK
   screenshots.sh       Automatischer Screenshot-Rundgang
+  net_test.sh          LAN-Test mit zwei Spielinstanzen (optional mit Lag/Paketverlust)
 .github/workflows/     CI: Tests + APK bei jedem Push, Release-APK bei Tags v*
 docs/                  Konzept und Fortschrittsberichte
 ```
@@ -44,7 +47,8 @@ docs/                  Konzept und Fortschrittsberichte
 | Im Editor öffnen | Godot 4.7 starten → `game/project.godot` importieren |
 | Tests | `godot --headless --path game res://tests/test_runner.tscn` |
 | Balancing-Simulation | `godot --headless --path game res://tests/balance_sim.tscn -- --duels=20 --teams=24` |
-| Debug-APK | `ANDROID_SDK_ROOT=… tools/build_apk.sh debug` → `build/glitch-brawl-0.1.0-debug.apk` |
+| LAN-Test (2 Instanzen) | `tools/net_test.sh 30 50,5` (30 s Match, 100 ms Ping, 5 % Verlust) |
+| Debug-APK | `ANDROID_SDK_ROOT=… tools/build_apk.sh debug` → `build/glitch-brawl-0.2.0-debug.apk` |
 
 Auf dem Desktop: Bewegen mit **WASD**, die Touch-Sticks lassen sich mit der Maus bedienen.
 
@@ -53,6 +57,6 @@ Auf dem Desktop: Bewegen mit **WASD**, die Touch-Sticks lassen sich mit der Maus
 | Bereich | Technologie |
 |---|---|
 | Engine / Client | Godot 4.7 (GDScript, Compatibility-Renderer), Android-Export als APK |
-| Multiplayer (geplant) | Server-autoritativ, ENet (UDP), Client-Vorhersage, LAN-Host-Modus |
+| Multiplayer | LAN: Host-autoritativ, ENet (UDP), 30 Snapshots/s, Client-Vorhersage, Interpolation, UDP-Broadcast-Suche |
 | Backend (geplant) | Nakama, PostgreSQL, Headless-Godot-Match-Server in Docker |
 | CI/CD | GitHub Actions → APK als Build-Artefakt, Release-APK bei Tags |

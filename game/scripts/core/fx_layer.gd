@@ -9,40 +9,63 @@ var match_ref: Match
 var _fx: Array[Dictionary] = []
 
 
+# Jede öffentliche Methode meldet den Effekt im LAN-Spiel an die Clients weiter
+# (nur auf dem Host); die Clients rufen dieselben Methoden beim Nachspielen auf.
+
+func _send(ev: Array) -> void:
+	if match_ref and match_ref.net:
+		match_ref.net.fx(ev)
+
+
 func beam(a: Vector2, b: Vector2, col: Color, width: float) -> void:
+	_send(["b", a.x, a.y, b.x, b.y, col.to_rgba32(), width])
 	_fx.append({"type": "beam", "a": a, "b": b, "col": col, "w": width, "t": 0.0, "dur": 0.18})
-	sparks(b, col, 5)
+	_sparks(b, col, 5)
 
 
 func slash(center: Vector2, dir: Vector2, reach: float, col: Color, strong: bool) -> void:
+	_send(["s", center.x, center.y, dir.x, dir.y, reach, col.to_rgba32(), strong])
 	_fx.append({"type": "slash", "c": center, "ang": dir.angle(), "r": reach * 0.8, "col": col,
 		"t": 0.0, "dur": 0.14, "w": 4.0 if strong else 2.5})
 
 
 func ring(center: Vector2, col: Color, radius: float) -> void:
-	_fx.append({"type": "ring", "c": center, "col": col, "r": radius, "t": 0.0, "dur": 0.35})
+	_send(["r", center.x, center.y, col.to_rgba32(), radius])
+	_ring(center, col, radius)
 
 
 func muzzle(p: Vector2, col: Color) -> void:
+	_send(["m", p.x, p.y, col.to_rgba32()])
 	_fx.append({"type": "muzzle", "c": p, "col": col, "t": 0.0, "dur": 0.08})
 
 
 func sparks(p: Vector2, col: Color, n: int) -> void:
-	for i in n:
-		var v := Vector2.from_angle(randf() * TAU) * randf_range(30.0, 110.0)
-		_fx.append({"type": "spark", "p": p, "v": v, "col": col, "t": 0.0, "dur": randf_range(0.2, 0.4)})
+	_send(["k", p.x, p.y, col.to_rgba32(), n])
+	_sparks(p, col, n)
 
 
 func burst(p: Vector2, col: Color) -> void:
-	sparks(p, col, 16)
-	sparks(p, Color("ff3df2"), 6)
-	sparks(p, Color("27e1ff"), 6)
-	ring(p, col, 34.0)
+	_send(["u", p.x, p.y, col.to_rgba32()])
+	_sparks(p, col, 16)
+	_sparks(p, Color("ff3df2"), 6)
+	_sparks(p, Color("27e1ff"), 6)
+	_ring(p, col, 34.0)
 
 
 func afterimage(f: Fighter) -> void:
+	_send(["a", f.id])
 	_fx.append({"type": "after", "p": f.position, "tex": f.sprite.texture, "frame": f.sprite.frame,
 		"flip": f.sprite.flip_h, "t": 0.0, "dur": 0.2})
+
+
+func _ring(center: Vector2, col: Color, radius: float) -> void:
+	_fx.append({"type": "ring", "c": center, "col": col, "r": radius, "t": 0.0, "dur": 0.35})
+
+
+func _sparks(p: Vector2, col: Color, n: int) -> void:
+	for i in n:
+		var v := Vector2.from_angle(randf() * TAU) * randf_range(30.0, 110.0)
+		_fx.append({"type": "spark", "p": p, "v": v, "col": col, "t": 0.0, "dur": randf_range(0.2, 0.4)})
 
 
 func _process(delta: float) -> void:

@@ -31,7 +31,8 @@ func _shot(file: String) -> void:
 func _to_window(p: Vector2) -> Vector2:
 	var win := Vector2(get_window().size)
 	var s := minf(win.x / 640.0, win.y / 360.0)
-	var off := (win - Vector2(640, 360) * s) * 0.5
+	var vp := get_viewport().get_visible_rect().size
+	var off := (win - vp * s) * 0.5
 	return off + p * s
 
 
@@ -71,7 +72,7 @@ func _run() -> void:
 	while is_instance_valid(cur) and cur.local and not cur.local.alive and tries < 40:
 		await _wait(0.25)
 		tries += 1
-	var attack_center: Vector2 = TouchControls.STICKS["attack"]["center"]
+	var attack_center: Vector2 = cur.touch.stick_center("attack") if is_instance_valid(cur) else Vector2(566, 290)
 	_touch(1, Vector2(96, 286), true)
 	await get_tree().process_frame
 	_drag(1, Vector2(118, 276))
